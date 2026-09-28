@@ -231,8 +231,7 @@ def activate_crop():
     if not hasattr(panel, 'image'): return
     dw, dh = clean_disp_img.width, clean_disp_img.height
     pad_x, pad_y = dw * 0.1, dh * 0.1
-    bbox = [img_canvas_x + pad_x, img_canvas_y + pad_y, 
-            img_canvas_x + dw - pad_x, img_canvas_y + dh - pad_y]
+    bbox = [img_canvas_x, img_canvas_y, img_canvas_x + dw, img_canvas_y + dh]
     panel.config(cursor="crosshair")
     displayimage(outputImage)
 
