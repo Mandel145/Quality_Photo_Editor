@@ -13,13 +13,12 @@ scale_factor = 1.0
 checkerboard_bg = None
 
 def generate_checkerboard():
-    # Create a 40x40 tile to optimize rendering
+    """Generates a full 600x600 checkerboard canvas background."""
     base = Image.new('RGB', (40, 40), color='#ffffff')
     draw = ImageDraw.Draw(base)
     draw.rectangle([20, 0, 39, 19], fill='#cccccc')
     draw.rectangle([0, 20, 19, 39], fill='#cccccc')
     
-    # Tile the 40x40 block across the 600x600 canvas
     cb = Image.new('RGB', (600, 600))
     for y in range(0, 600, 40):
         for x in range(0, 600, 40):
@@ -29,7 +28,7 @@ def generate_checkerboard():
 def displayimage(img_to_display):
     global dispimage, img_canvas_x, img_canvas_y, scale_factor, checkerboard_bg
     
-    # Generate background on first run
+    # 1. Generate full 600x600 checkerboard background once
     if checkerboard_bg is None:
         checkerboard_bg = generate_checkerboard()
 
@@ -40,21 +39,22 @@ def displayimage(img_to_display):
     except AttributeError:
         resample = Image.LANCZOS
         
-    # If the image is larger than canvas, contain it. If smaller, keep actual size.
     if ow > 600 or oh > 600:
         disp_img = ImageOps.contain(img_to_display, (600, 600), resample)
     else:
         disp_img = img_to_display.copy()
         
     dispimage = ImageTk.PhotoImage(disp_img)
-    
     dw, dh = disp_img.size
+    
     scale_factor = dw / ow if ow > 0 else 1
     
     img_canvas_x = 300 - dw / 2
     img_canvas_y = 300 - dh / 2
-    
+
     panel.delete("all")
+    
+    # 2. Draw full canvas checkerboard first, then overlay the image in the center
     panel.create_image(300, 300, image=checkerboard_bg, anchor=CENTER)
     panel.create_image(300, 300, image=dispimage, anchor=CENTER)
     panel.image = dispimage 
@@ -79,7 +79,7 @@ def draw_handles():
     
     # Instruction Text
     action_text = "Resize" if current_mode == 'resize' else "Crop"
-    txt_id = panel.create_text(300, 20, text=f"Drag corners to {action_text}. Press ENTER to apply.", 
+    txt_id = panel.create_text(panel.winfo_reqwidth() // 2, 20, text=f"Drag corners to {action_text}. Press ENTER to apply.",
                                fill="black", font=("poppins", 12, "bold"), tags="overlay")
     # Text background for readability
     txt_bbox = panel.bbox(txt_id)
@@ -103,9 +103,9 @@ def activate_resize():
     global current_mode, bbox
     current_mode = 'resize'
     if not hasattr(panel, 'image'): return
-    dw = dispimage.width()
-    dh = dispimage.height()
-    bbox = [img_canvas_x, img_canvas_y, img_canvas_x + dw, img_canvas_y + dh]
+    
+    # Start the handles at the full 600x600 canvas limits
+    bbox = [0, 0, 600, 600]
     panel.config(cursor="crosshair")
     displayimage(outputImage)
 
@@ -128,7 +128,20 @@ def start_drag(event):
 
 def drag(event):
     if not current_mode or not active_handle: return
-    x, y = event.x, event.y
+    dw = dispimage.width()
+    dh = dispimage.height()
+    
+    if current_mode == 'resize':
+        # Allow dragging across the full 600x600 canvas area to enlarge/upsize
+        min_x, max_x = 0, 600
+        min_y, max_y = 0, 600
+    else:
+        # Keep crop handles bounded to the actual image display bounds
+        min_x, max_x = img_canvas_x, img_canvas_x + dw
+        min_y, max_y = img_canvas_y, img_canvas_y + dh
+    
+    x = max(min_x, min(max_x, event.x))
+    y = max(min_y, min(max_y, event.y))
     
     if active_handle == 'TL': bbox[0], bbox[1] = x, y
     elif active_handle == 'TR': bbox[2], bbox[1] = x, y
@@ -149,31 +162,30 @@ def apply_action(event=None):
     x1, x2 = sorted([bbox[0], bbox[2]])
     y1, y2 = sorted([bbox[1], bbox[3]])
     
-    # Map UI canvas pixels back to real image pixels
-    ox1 = (x1 - img_canvas_x) / scale_factor
-    oy1 = (y1 - img_canvas_y) / scale_factor
-    ox2 = (x2 - img_canvas_x) / scale_factor
-    oy2 = (y2 - img_canvas_y) / scale_factor
-    
-    ow, oh = img.size
-    ox1, oy1 = max(0, int(ox1)), max(0, int(oy1))
-    ox2, oy2 = min(ow, int(ox2)), min(oh, int(oy2))
-    
-    if ox2 - ox1 < 5 or oy2 - oy1 < 5:
-        current_mode = None
-        panel.config(cursor="")
-        displayimage(outputImage)
-        return
-        
     try:
         resample = Image.Resampling.LANCZOS
     except AttributeError:
         resample = Image.LANCZOS
         
     if current_mode == 'crop':
-        img = img.crop((ox1, oy1, ox2, oy2))
+        # Translate canvas coordinates to original image pixels
+        ox1 = (x1 - img_canvas_x) / scale_factor
+        oy1 = (y1 - img_canvas_y) / scale_factor
+        ox2 = (x2 - img_canvas_x) / scale_factor
+        oy2 = (y2 - img_canvas_y) / scale_factor
+        
+        ow, oh = img.size
+        ox1, oy1 = max(0, int(ox1)), max(0, int(oy1))
+        ox2, oy2 = min(ow, int(ox2)), min(oh, int(oy2))
+        
+        if ox2 - ox1 > 5 and oy2 - oy1 > 5:
+            img = img.crop((ox1, oy1, ox2, oy2))
+            
     elif current_mode == 'resize':
-        img = img.resize((ox2 - ox1, oy2 - oy1), resample)
+        # Convert selected canvas bounding box dimensions into real image pixel dimensions
+        target_w = max(10, int((x2 - x1) / scale_factor))
+        target_h = max(10, int((y2 - y1) / scale_factor))
+        img = img.resize((target_w, target_h), resample)
         
     current_mode = None
     panel.config(cursor="")
