@@ -1,5 +1,5 @@
 from tkinter import *
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
 from PIL import ImageTk, Image, ImageEnhance, ImageFilter, ImageOps, ImageDraw
 import os
 
@@ -11,6 +11,7 @@ img_canvas_x = 0
 img_canvas_y = 0
 scale_factor = 1.0
 checkerboard_bg = None
+unsaved_changes = False
 
 def generate_checkerboard():
     """Generates a full 600x600 checkerboard canvas background."""
@@ -191,8 +192,8 @@ def apply_action(event=None):
     panel.config(cursor="")
     apply_sliders()
 
-def apply_sliders(*args):
-    global outputImage
+def apply_sliders(*args, mark_changed=True):
+    global outputImage, unsaved_changes
     temp_img = img.copy()
     
     b_val = brightnessSlider.get()
@@ -209,6 +210,9 @@ def apply_sliders(*args):
         
     outputImage = temp_img
     displayimage(outputImage)
+
+    if mark_changed:
+        unsaved_changes = True
 
 def rotate():
     global img
@@ -261,15 +265,36 @@ def ChangeImg():
         apply_sliders()
 
 def save():
-    global outputImage
+    global outputImage, unsaved_changes
     save_path = filedialog.asksaveasfilename(defaultextension=".jpg", filetypes=[("JPEG", "*.jpg"), ("PNG", "*.png"), ("All Files", "*.*")])
     if save_path:
         img_to_save = outputImage
         if save_path.lower().endswith((".jpg", ".jpeg")) and img_to_save.mode in ("RGBA", "P"):
             img_to_save = img_to_save.convert("RGB")
         img_to_save.save(save_path)
+        unsaved_changes = False
 
 def close():
+    def close():
+        global unsaved_changes
+
+    if unsaved_changes:
+        answer = messagebox.askyesnocancel(
+            "Unsaved Changes",
+            "You have unsaved changes.\n\nDo you want to save before closing?"
+        )
+
+        if answer is True:
+            save()
+            if unsaved_changes:
+                return
+
+        elif answer is None:
+            # Cancel
+            return
+
+        # If answer is False, close without saving.
+
     mains.destroy()
 
 mains = Tk()
