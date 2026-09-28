@@ -1,7 +1,10 @@
 from tkinter import *
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
 from PIL import ImageTk, Image, ImageEnhance, ImageFilter, ImageOps, ImageDraw
 import os
+
+# --- PATH RESOLUTION FOR VS CODE / SEPARATE DIRECTORIES ---
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- GLOBAL VARIABLES FOR UI & HISTORY STATE ---
 current_mode = None       
@@ -30,6 +33,7 @@ base_image = None
 
 is_rendering = False
 slider_start_vals = {}    
+unsaved_changes = False  # Tracks if there are edits pending a save
 
 
 def generate_checkerboard():
@@ -227,7 +231,8 @@ def activate_crop():
     if not hasattr(panel, 'image'): return
     dw, dh = clean_disp_img.width, clean_disp_img.height
     pad_x, pad_y = dw * 0.1, dh * 0.1
-    bbox = [img_canvas_x, img_canvas_y, img_canvas_x + dw, img_canvas_y + dh]
+    bbox = [img_canvas_x + pad_x, img_canvas_y + pad_y, 
+            img_canvas_x + dw - pad_x, img_canvas_y + dh - pad_y]
     panel.config(cursor="crosshair")
     displayimage(outputImage)
 
@@ -366,7 +371,9 @@ def render_state():
     apply_sliders_to_image()
 
 def add_action(action_name, value=None, slider_type=None):
-    global current_step, action_history, base_image
+    global current_step, action_history, base_image, unsaved_changes
+    
+    unsaved_changes = True # Flag that a new edit requires saving
     
     action_history = action_history[:current_step]
     
@@ -388,15 +395,17 @@ def add_action(action_name, value=None, slider_type=None):
     update_button_states()
 
 def undo():
-    global current_step
+    global current_step, unsaved_changes
     if current_step > 0:
+        unsaved_changes = True
         current_step -= 1
         render_state()
         update_button_states()
 
 def redo():
-    global current_step
+    global current_step, unsaved_changes
     if current_step < len(action_history):
+        unsaved_changes = True
         current_step += 1
         render_state()
         update_button_states()
@@ -445,7 +454,7 @@ def emboss(): add_action('emboss')
 def edgeEnhance(): add_action('edgeEnhance')
 
 def reset():
-    global current_mode, action_history, current_step, base_image, original_img
+    global current_mode, action_history, current_step, base_image, original_img, unsaved_changes
     current_mode = None
     panel.config(cursor="")
     
@@ -454,12 +463,13 @@ def reset():
     
     action_history = []
     current_step = 0
+    unsaved_changes = False # Wiped clean
     render_state()
     update_button_states()
 
 def ChangeImg():
-    global base_image, original_img, action_history, current_step
-    imgname = filedialog.askopenfilename(title="Change Image")
+    global base_image, original_img, action_history, current_step, unsaved_changes
+    imgname = filedialog.askopenfilename(initialdir=SCRIPT_DIR, title="Change Image")
     if imgname:
         base_image = Image.open(imgname)
         original_img = base_image.copy() 
@@ -467,19 +477,37 @@ def ChangeImg():
         
         action_history = []
         current_step = 0
+        unsaved_changes = False # Wiped clean
         render_state()
         update_button_states()
 
 def save():
-    global outputImage
-    save_path = filedialog.asksaveasfilename(defaultextension=".jpg", filetypes=[("JPEG", "*.jpg"), ("PNG", "*.png"), ("All Files", "*.*")])
+    global outputImage, unsaved_changes
+    save_path = filedialog.asksaveasfilename(initialdir=SCRIPT_DIR, defaultextension=".jpg", filetypes=[("JPEG", "*.jpg"), ("PNG", "*.png"), ("All Files", "*.*")])
     if save_path:
         img_to_save = outputImage
         if save_path.lower().endswith((".jpg", ".jpeg")) and img_to_save.mode in ("RGBA", "P"):
             img_to_save = img_to_save.convert("RGB")
         img_to_save.save(save_path)
+        unsaved_changes = False # Image is now saved
 
 def close():
+    """Intercepts application close to check for unsaved edits."""
+    global unsaved_changes
+    if unsaved_changes:
+        answer = messagebox.askyesnocancel(
+            "Unsaved Changes",
+            "You have unsaved changes.\n\nDo you want to save before closing?"
+        )
+        if answer is True:
+            save()
+            # If unsaved_changes is still True, they backed out of the save dialog.
+            if unsaved_changes:
+                return
+        elif answer is None:
+            # They explicitly clicked Cancel
+            return
+            
     mains.destroy()
 
 # --- TKINTER GUI SETUP ---
@@ -493,8 +521,21 @@ mains.title(f"{space}Image Editor")
 mains.configure(bg='#323946')
 mains.attributes("-fullscreen", True)
 
+# Intercept the OS 'X' close button as well as our internal Close button
+mains.protocol("WM_DELETE_WINDOW", close)
+
+# --- ABSOLUTE PATH WINDOW ICON FIX ---
 try:
-    initial_img = Image.open("logo.png")
+    icon_path = os.path.join(SCRIPT_DIR, "icon.png")
+    app_icon = PhotoImage(file=icon_path)
+    mains.iconphoto(False, app_icon)
+except Exception:
+    pass 
+
+# --- ABSOLUTE PATH STARTUP LOGO FIX ---
+try:
+    logo_path = os.path.join(SCRIPT_DIR, "logo.png")
+    initial_img = Image.open(logo_path)
 except FileNotFoundError:
     initial_img = Image.new('RGB', (600, 600), color='#323946')
 
