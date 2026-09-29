@@ -21,8 +21,10 @@ pan_x = 300
 pan_y = 300
 last_pan_x = 0
 last_pan_y = 0
+last_canvas_size = None
 
 checkerboard_bg = None    
+checkerboard_size = None
 clean_disp_img = None     
 image_item_id = None      
 preview_tk = None         
@@ -36,16 +38,16 @@ slider_start_vals = {}
 unsaved_changes = False  # Tracks if there are edits pending a save
 
 
-def generate_checkerboard():
+def generate_checkerboard(width, height):
     """Generates a gray and white checkered background for transparent/blank spaces."""
     base = Image.new('RGB', (40, 40), color='#ffffff')
     draw = ImageDraw.Draw(base)
     draw.rectangle([20, 0, 39, 19], fill='#cccccc')
     draw.rectangle([0, 20, 19, 39], fill='#cccccc')
     
-    cb = Image.new('RGB', (600, 600))
-    for y in range(0, 600, 40):
-        for x in range(0, 600, 40):
+    cb = Image.new('RGB', (width, height))
+    for y in range(0, height, 40):
+        for x in range(0, width, 40):
             cb.paste(base, (x, y))
     return ImageTk.PhotoImage(cb)
 
@@ -53,15 +55,22 @@ def reset_viewport(img):
     """Auto-fits newly loaded images to the screen so massive files aren't cut off."""
     global zoom_level, pan_x, pan_y
     w, h = img.size
-    zoom_level = min(500/w, 500/h, 1.0)
-    pan_x, pan_y = 300, 300
+    canvas_width = panel.winfo_width() if 'panel' in globals() else 1
+    canvas_height = panel.winfo_height() if 'panel' in globals() else 1
+    viewport_width = max(1, (canvas_width if canvas_width > 1 else 600) - 40)
+    viewport_height = max(1, (canvas_height if canvas_height > 1 else 600) - 40)
+    zoom_level = min(viewport_width / w, viewport_height / h, 1.0)
+    pan_x, pan_y = viewport_width / 2 + 20, viewport_height / 2 + 20
 
 def displayimage(img_to_display):
     """Updates the Tkinter canvas using true Zoom and Pan positioning."""
-    global dispimage, img_canvas_x, img_canvas_y, scale_factor, checkerboard_bg, clean_disp_img, image_item_id
+    global dispimage, img_canvas_x, img_canvas_y, scale_factor, checkerboard_bg, checkerboard_size, clean_disp_img, image_item_id
     
-    if checkerboard_bg is None:
-        checkerboard_bg = generate_checkerboard()
+    canvas_width = max(1, panel.winfo_width())
+    canvas_height = max(1, panel.winfo_height())
+    if checkerboard_bg is None or checkerboard_size != (canvas_width, canvas_height):
+        checkerboard_bg = generate_checkerboard(canvas_width, canvas_height)
+        checkerboard_size = (canvas_width, canvas_height)
 
     ow, oh = img_to_display.size
     try:
@@ -86,7 +95,7 @@ def displayimage(img_to_display):
     img_canvas_y = pan_y - dh / 2
     
     panel.delete("all")
-    panel.create_image(300, 300, image=checkerboard_bg, anchor=CENTER)
+    panel.create_image(canvas_width / 2, canvas_height / 2, image=checkerboard_bg, anchor=CENTER)
     image_item_id = panel.create_image(pan_x, pan_y, image=dispimage, anchor=CENTER)
     panel.image = dispimage 
     
@@ -95,10 +104,44 @@ def displayimage(img_to_display):
     if current_mode in ['crop', 'resize']:
         draw_handles()
 
+def resize_canvas(event):
+    """Keep the image centered and proportionally scaled with the canvas."""
+    global last_canvas_size, zoom_level, pan_x, pan_y
+    if event.width <= 1 or event.height <= 1:
+        return
+
+    new_size = (event.width, event.height)
+    if last_canvas_size != new_size:
+        old_zoom = zoom_level
+        old_image_left = pan_x - img.width * old_zoom / 2
+        old_image_top = pan_y - img.height * old_zoom / 2
+        old_bbox = tuple(bbox) if current_mode in ['crop', 'resize'] else None
+        available_width = max(1, event.width - 40)
+        available_height = max(1, event.height - 40)
+        if last_canvas_size is None:
+            zoom_level = min(available_width / img.width, available_height / img.height, 1.0)
+        else:
+            old_width = max(1, last_canvas_size[0] - 40)
+            old_height = max(1, last_canvas_size[1] - 40)
+            zoom_level *= min(available_width / old_width, available_height / old_height)
+            zoom_level = max(0.01, min(zoom_level, 50.0))
+        pan_x, pan_y = event.width / 2, event.height / 2
+        if old_bbox is not None:
+            new_image_left = pan_x - img.width * zoom_level / 2
+            new_image_top = pan_y - img.height * zoom_level / 2
+            bbox[0] = new_image_left + (old_bbox[0] - old_image_left) / old_zoom * zoom_level
+            bbox[2] = new_image_left + (old_bbox[2] - old_image_left) / old_zoom * zoom_level
+            bbox[1] = new_image_top + (old_bbox[1] - old_image_top) / old_zoom * zoom_level
+            bbox[3] = new_image_top + (old_bbox[3] - old_image_top) / old_zoom * zoom_level
+        last_canvas_size = new_size
+        displayimage(outputImage)
+
 def draw_rulers(ow, oh):
     """Draws axis rulers and updates the dimension status label."""
-    panel.create_rectangle(0, 0, 600, 22, fill='#1f242d', outline='#4f5b66') 
-    panel.create_rectangle(0, 0, 22, 600, fill='#1f242d', outline='#4f5b66') 
+    canvas_width = max(1, panel.winfo_width())
+    canvas_height = max(1, panel.winfo_height())
+    panel.create_rectangle(0, 0, canvas_width, 22, fill='#1f242d', outline='#4f5b66')
+    panel.create_rectangle(0, 0, 22, canvas_height, fill='#1f242d', outline='#4f5b66')
     panel.create_rectangle(0, 0, 22, 22, fill='#14181d', outline='#4f5b66')  
     
     step = 100
@@ -110,7 +153,7 @@ def draw_rulers(ow, oh):
     img_left = img_canvas_x
     for x_val in range(0, ow + 1, step):
         canvas_x = img_left + (x_val * scale_factor)
-        if 22 <= canvas_x <= 600:
+        if 22 <= canvas_x <= canvas_width:
             panel.create_line(canvas_x, 15, canvas_x, 22, fill='white')
             if x_val > 0:
                 panel.create_text(canvas_x, 8, text=str(x_val), fill='#a0a0a0', font=('Arial', 7))
@@ -118,7 +161,7 @@ def draw_rulers(ow, oh):
     img_top = img_canvas_y
     for y_val in range(0, oh + 1, step):
         canvas_y = img_top + (y_val * scale_factor)
-        if 22 <= canvas_y <= 600:
+        if 22 <= canvas_y <= canvas_height:
             panel.create_line(15, canvas_y, 22, canvas_y, fill='white')
             if y_val > 0:
                 panel.create_text(10, canvas_y, text=str(y_val), fill='#a0a0a0', font=('Arial', 7), angle=90)
@@ -218,7 +261,7 @@ def draw_handles():
     panel.create_rectangle(x2-s, y2-s, x2+s, y2+s, fill=color, tags="overlay") 
     
     action_text = "Resize" if current_mode == 'resize' else "Crop"
-    txt_id = panel.create_text(300, 35, text=f"Drag corners to {action_text}. Press ENTER to apply. (ESC to cancel)", 
+    txt_id = panel.create_text(panel.winfo_width() / 2, 35, text=f"Drag corners to {action_text}. Press ENTER to apply. (ESC to cancel)",
                                fill="black", font=("poppins", 11, "bold"), tags="overlay")
     txt_bbox = panel.bbox(txt_id)
     panel.create_rectangle(txt_bbox[0]-5, txt_bbox[1]-2, txt_bbox[2]+5, txt_bbox[3]+2, 
@@ -511,14 +554,12 @@ def close():
 
 # --- TKINTER GUI SETUP ---
 mains = Tk()
-space = (" ") * 215
-screen_width = mains.winfo_screenwidth()
-screen_height = mains.winfo_screenheight()
-
-mains.geometry(f"{screen_width}x{screen_height}")
-mains.title(f"{space}Image Editor")
+mains.geometry("1200x800")
+mains.minsize(760, 580)
+mains.title("Image Editor")
 mains.configure(bg='#323946')
-mains.attributes("-fullscreen", True)
+mains.grid_columnconfigure(0, weight=1)
+mains.grid_rowconfigure(1, weight=1)
 
 # Intercept the OS 'X' close button as well as our internal Close button
 mains.protocol("WM_DELETE_WINDOW", close)
@@ -543,25 +584,42 @@ base_image = initial_img.copy()
 img = initial_img.copy()
 outputImage = initial_img.copy()
 
-reset_viewport(base_image)
+toolbar = Frame(mains, bg="#323946")
+toolbar.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 4))
+toolbar.grid_columnconfigure(4, weight=1)
 
-panel = Canvas(mains, width=600, height=600, bg='#323946', highlightthickness=0)
-panel.grid(row=0, column=0, rowspan=12, padx=50, pady=50)
+editor_frame = Frame(mains, bg="#323946")
+editor_frame.grid(row=1, column=0, sticky="nsew", padx=(12, 6), pady=6)
+editor_frame.grid_rowconfigure(0, weight=1)
+editor_frame.grid_columnconfigure(0, weight=1)
 
-dim_label = Label(mains, text="", bg="#323946", fg="white", font=('poppins', 10, 'bold'))
-dim_label.place(x=50, y=660)
+controls_frame = Frame(mains, bg="#323946")
+controls_frame.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=6)
+controls_frame.grid_columnconfigure(0, weight=1, uniform="controls")
+controls_frame.grid_columnconfigure(1, weight=1, uniform="controls")
 
-coord_label = Label(mains, text="Cursor: X: 0, Y: 0 px", bg="#323946", fg="#00ffcc", font=('poppins', 10, 'bold'))
-coord_label.place(x=350, y=660)
+status_frame = Frame(mains, bg="#323946")
+status_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=12, pady=(4, 10))
+status_frame.grid_columnconfigure(1, weight=1)
 
-Label(mains, text="Mouse Wheel: Zoom  |  Right/Middle Drag: Pan", 
-      bg="#323946", fg="gray", font=('poppins', 9, 'italic')).place(x=50, y=685)
+panel = Canvas(editor_frame, bg='#323946', highlightthickness=0)
+panel.grid(row=0, column=0, sticky="nsew")
+
+dim_label = Label(status_frame, text="", bg="#323946", fg="white", font=('poppins', 10, 'bold'))
+dim_label.grid(row=0, column=0, sticky="w", padx=(0, 16))
+
+coord_label = Label(status_frame, text="Cursor: X: 0, Y: 0 px", bg="#323946", fg="#00ffcc", font=('poppins', 10, 'bold'))
+coord_label.grid(row=0, column=1, sticky="w")
+
+Label(status_frame, text="Mouse Wheel: Zoom  |  Right/Middle Drag: Pan",
+    bg="#323946", fg="gray", font=('poppins', 9, 'italic')).grid(row=0, column=2, sticky="e")
 
 # Input Bindings
 panel.bind("<ButtonPress-1>", start_drag)
 panel.bind("<B1-Motion>", drag)
 panel.bind("<ButtonRelease-1>", end_drag)
 panel.bind("<Motion>", track_mouse)
+panel.bind("<Configure>", resize_canvas)
 
 # Viewport Bindings
 panel.bind("<MouseWheel>", zoom)
@@ -576,90 +634,90 @@ mains.bind("<Return>", apply_action)
 mains.bind("<Escape>", cancel_action)
 
 # --- UI WIDGETS ---
-brightnessSlider = Scale(mains, label="Brightness", from_=0, to=2, orient=HORIZONTAL, length=200,
+brightnessSlider = Scale(controls_frame, label="Brightness", from_=0, to=2, orient=HORIZONTAL, length=120,
                          resolution=0.1, command=on_slider_move, bg="#1f242d")
 brightnessSlider.set(1)
 brightnessSlider.configure(font=('poppins',11,'bold'),foreground='white')
-brightnessSlider.place(x=1070,y=15)
+brightnessSlider.grid(row=0, column=0, columnspan=2, sticky="ew", padx=4, pady=2)
 brightnessSlider.bind("<ButtonPress-1>", lambda e: on_slider_press('brightness', brightnessSlider))
 brightnessSlider.bind("<ButtonRelease-1>", lambda e: on_slider_release('brightness', brightnessSlider))
 
-contrastSlider = Scale(mains, label="Contrast", from_=0, to=2, orient=HORIZONTAL, length=200,
+contrastSlider = Scale(controls_frame, label="Contrast", from_=0, to=2, orient=HORIZONTAL, length=120,
                        command=on_slider_move, resolution=0.1, bg="#1f242d")
 contrastSlider.set(1)
 contrastSlider.configure(font=('poppins',11,'bold'),foreground='white')
-contrastSlider.place(x=1070,y=90)
+contrastSlider.grid(row=1, column=0, columnspan=2, sticky="ew", padx=4, pady=2)
 contrastSlider.bind("<ButtonPress-1>", lambda e: on_slider_press('contrast', contrastSlider))
 contrastSlider.bind("<ButtonRelease-1>", lambda e: on_slider_release('contrast', contrastSlider))
 
-sharpnessSlider = Scale(mains, label="Sharpness", from_=0, to=2, orient=HORIZONTAL, length=200,
+sharpnessSlider = Scale(controls_frame, label="Sharpness", from_=0, to=2, orient=HORIZONTAL, length=120,
                         command=on_slider_move, resolution=0.1, bg="#1f242d")
 sharpnessSlider.set(1)
 sharpnessSlider.configure(font=('poppins',11,'bold'),foreground='white')
-sharpnessSlider.place(x=1070,y=165)
+sharpnessSlider.grid(row=2, column=0, columnspan=2, sticky="ew", padx=4, pady=2)
 sharpnessSlider.bind("<ButtonPress-1>", lambda e: on_slider_press('sharpness', sharpnessSlider))
 sharpnessSlider.bind("<ButtonRelease-1>", lambda e: on_slider_release('sharpness', sharpnessSlider))
 
-colorSlider = Scale(mains, label="Colors", from_=0, to=2, orient=HORIZONTAL, length=200,
+colorSlider = Scale(controls_frame, label="Colors", from_=0, to=2, orient=HORIZONTAL, length=120,
                     command=on_slider_move, resolution=0.1, bg="#1f242d")
 colorSlider.set(1)
 colorSlider.configure(font=('poppins',11,'bold'),foreground='white')
-colorSlider.place(x=1070,y=240)
+colorSlider.grid(row=3, column=0, columnspan=2, sticky="ew", padx=4, pady=2)
 colorSlider.bind("<ButtonPress-1>", lambda e: on_slider_press('color', colorSlider))
 colorSlider.bind("<ButtonRelease-1>", lambda e: on_slider_release('color', colorSlider))
 
-btnRotate = Button(mains, text='Rotate', width=25, command=rotate, bg="#1f242d")
+btnRotate = Button(controls_frame, text='Rotate', width=16, command=rotate, bg="#1f242d")
 btnRotate.configure(font=('poppins',11,'bold'),foreground='white')
-btnRotate.place(x=805,y=110)
+btnRotate.grid(row=4, column=0, sticky="ew", padx=4, pady=3)
 
-btnChaImg = Button(mains, text='Change Image', width=25,command=ChangeImg,bg="#1f242d",activebackground="ORANGE")
+btnChaImg = Button(controls_frame, text='Change Image', width=16,command=ChangeImg,bg="#1f242d",activebackground="ORANGE")
 btnChaImg.configure(font=('poppins',11,'bold'),foreground='white')
-btnChaImg.place(x=805,y=35)
+btnChaImg.grid(row=4, column=1, sticky="ew", padx=4, pady=3)
 
-btnFlip = Button(mains, text='Flip', width=25, command=flip, bg="#1f242d")
+btnFlip = Button(controls_frame, text='Flip', width=16, command=flip, bg="#1f242d")
 btnFlip.configure(font=('poppins',11,'bold'),foreground='white')
-btnFlip.place(x=805,y=180)
+btnFlip.grid(row=5, column=0, sticky="ew", padx=4, pady=3)
 
-btnResize = Button(mains, text='Resize', width=25, command=activate_resize, bg="#1f242d")
+btnResize = Button(controls_frame, text='Resize', width=16, command=activate_resize, bg="#1f242d")
 btnResize.configure(font=('poppins',11,'bold'),foreground='white')
-btnResize.place(x=805,y=255)
+btnResize.grid(row=5, column=1, sticky="ew", padx=4, pady=3)
 
-btnCrop = Button(mains, text='Crop', width=25, command=activate_crop, bg="#1f242d")
+btnCrop = Button(controls_frame, text='Crop', width=16, command=activate_crop, bg="#1f242d")
 btnCrop.configure(font=('poppins',11,'bold'),foreground='white')
-btnCrop.place(x=805,y=340)
+btnCrop.grid(row=6, column=0, sticky="ew", padx=4, pady=3)
 
-btnBlur = Button(mains, text='Blur', width=25, command=blurr, bg="#1f242d")
+btnBlur = Button(controls_frame, text='Blur', width=16, command=blurr, bg="#1f242d")
 btnBlur.configure(font=('poppins',11,'bold'),foreground='white')
-btnBlur.place(x=805,y=425)
+btnBlur.grid(row=6, column=1, sticky="ew", padx=4, pady=3)
 
-btnEmboss = Button(mains, text='Emboss', width=25, command=emboss, bg="#1f242d")
+btnEmboss = Button(controls_frame, text='Emboss', width=16, command=emboss, bg="#1f242d")
 btnEmboss.configure(font=('poppins',11,'bold'),foreground='white')
-btnEmboss.place(x=805,y=510)
+btnEmboss.grid(row=7, column=0, sticky="ew", padx=4, pady=3)
 
-btnEdgeEnhance = Button(mains, text='EdgeEnhance', width=25, command=edgeEnhance, bg="#1f242d")
+btnEdgeEnhance = Button(controls_frame, text='EdgeEnhance', width=16, command=edgeEnhance, bg="#1f242d")
 btnEdgeEnhance.configure(font=('poppins',11,'bold'),foreground='white')
-btnEdgeEnhance.place(x=805,y=595)
+btnEdgeEnhance.grid(row=7, column=1, sticky="ew", padx=4, pady=3)
 
-btnSave = Button(mains, text='Save', width=25, command=save, bg="black")
+btnSave = Button(controls_frame, text='Save', width=16, command=save, bg="black")
 btnSave.configure(font=('poppins',11,'bold'),foreground='white')
-btnSave.place(x=805,y=675)
+btnSave.grid(row=8, column=0, columnspan=2, sticky="ew", padx=4, pady=3)
 
 # --- TOP BAR BUTTONS ---
-reset_button = Button(mains,text="Reset",command=reset,bg="black",activebackground="ORANGE")
+reset_button = Button(toolbar,text="Reset",command=reset,bg="black",activebackground="ORANGE")
 reset_button.configure(font=('poppins',10,'bold'),foreground='white')
-reset_button.place(x=380,y=15)
+reset_button.grid(row=0, column=0, padx=3)
 
-btnClose = Button(mains, text='Close', command=close, bg="black",activebackground="ORANGE")
+btnClose = Button(toolbar, text='Close', command=close, bg="black",activebackground="ORANGE")
 btnClose.configure(font=('poppins',10,'bold'),foreground='white')
-btnClose.place(x=440,y=15)
+btnClose.grid(row=0, column=1, padx=3)
 
-btnUndo = Button(mains, text='Undo', command=undo, bg="black", activebackground="ORANGE")
+btnUndo = Button(toolbar, text='Undo', command=undo, bg="black", activebackground="ORANGE")
 btnUndo.configure(font=('poppins',10,'bold'), foreground='white')
-btnUndo.place(x=505, y=15)
+btnUndo.grid(row=0, column=2, padx=3)
 
-btnRedo = Button(mains, text='Redo', command=redo, bg="black", activebackground="ORANGE")
+btnRedo = Button(toolbar, text='Redo', command=redo, bg="black", activebackground="ORANGE")
 btnRedo.configure(font=('poppins',10,'bold'), foreground='white')
-btnRedo.place(x=565, y=15)
+btnRedo.grid(row=0, column=3, padx=3)
 
 displayimage(img)
 update_button_states()
