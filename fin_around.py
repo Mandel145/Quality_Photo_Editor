@@ -17,6 +17,8 @@ img_canvas_x = 0
 img_canvas_y = 0          
 scale_factor = 1.0        
 zoom_level = 1.0
+fit_zoom_level = 1.0
+resize_zoom = 1.0
 pan_x = 300
 pan_y = 300
 last_pan_x = 0
@@ -38,6 +40,14 @@ slider_start_vals = {}
 unsaved_changes = False  # Tracks if there are edits pending a save
 
 
+def calculate_fit_zoom(image_size, canvas_size):
+    image_width, image_height = image_size
+    canvas_width, canvas_height = canvas_size
+    available_width = max(1, canvas_width - 40)
+    available_height = max(1, canvas_height - 40)
+    return min(available_width / image_width, available_height / image_height, 1.0)
+
+
 def generate_checkerboard(width, height):
     """Generates a gray and white checkered background for transparent/blank spaces."""
     base = Image.new('RGB', (40, 40), color='#ffffff')
@@ -53,14 +63,17 @@ def generate_checkerboard(width, height):
 
 def reset_viewport(img):
     """Auto-fits newly loaded images to the screen so massive files aren't cut off."""
-    global zoom_level, pan_x, pan_y
+    global zoom_level, fit_zoom_level, resize_zoom, pan_x, pan_y, last_canvas_size
     w, h = img.size
     canvas_width = panel.winfo_width() if 'panel' in globals() else 1
     canvas_height = panel.winfo_height() if 'panel' in globals() else 1
-    viewport_width = max(1, (canvas_width if canvas_width > 1 else 600) - 40)
-    viewport_height = max(1, (canvas_height if canvas_height > 1 else 600) - 40)
-    zoom_level = min(viewport_width / w, viewport_height / h, 1.0)
-    pan_x, pan_y = viewport_width / 2 + 20, viewport_height / 2 + 20
+    canvas_width = canvas_width if canvas_width > 1 else 600
+    canvas_height = canvas_height if canvas_height > 1 else 600
+    fit_zoom_level = calculate_fit_zoom((w, h), (canvas_width, canvas_height))
+    zoom_level = fit_zoom_level
+    resize_zoom = 1.0
+    pan_x, pan_y = canvas_width / 2, canvas_height / 2
+    last_canvas_size = (canvas_width, canvas_height)
 
 def displayimage(img_to_display):
     """Updates the Tkinter canvas using true Zoom and Pan positioning."""
@@ -106,7 +119,7 @@ def displayimage(img_to_display):
 
 def resize_canvas(event):
     """Keep the image centered and proportionally scaled with the canvas."""
-    global last_canvas_size, zoom_level, pan_x, pan_y
+    global last_canvas_size, zoom_level, fit_zoom_level, resize_zoom, pan_x, pan_y
     if event.width <= 1 or event.height <= 1:
         return
 
@@ -116,15 +129,10 @@ def resize_canvas(event):
         old_image_left = pan_x - img.width * old_zoom / 2
         old_image_top = pan_y - img.height * old_zoom / 2
         old_bbox = tuple(bbox) if current_mode in ['crop', 'resize'] else None
-        available_width = max(1, event.width - 40)
-        available_height = max(1, event.height - 40)
         if last_canvas_size is None:
-            zoom_level = min(available_width / img.width, available_height / img.height, 1.0)
-        else:
-            old_width = max(1, last_canvas_size[0] - 40)
-            old_height = max(1, last_canvas_size[1] - 40)
-            zoom_level *= min(available_width / old_width, available_height / old_height)
-            zoom_level = max(0.01, min(zoom_level, 50.0))
+            resize_zoom = 1.0
+        fit_zoom_level = calculate_fit_zoom(img.size, new_size)
+        zoom_level = fit_zoom_level * resize_zoom
         pan_x, pan_y = event.width / 2, event.height / 2
         if old_bbox is not None:
             new_image_left = pan_x - img.width * zoom_level / 2
@@ -185,7 +193,7 @@ def track_mouse(event):
 
 def zoom(event):
     """Zooms in and out with the mouse wheel, centering on the cursor."""
-    global zoom_level, pan_x, pan_y
+    global zoom_level, fit_zoom_level, resize_zoom, pan_x, pan_y
     
     if current_mode in ['crop', 'resize']:
         cancel_action()
@@ -198,6 +206,7 @@ def zoom(event):
         zoom_level /= 1.15
         
     zoom_level = max(0.01, min(zoom_level, 50.0))
+    resize_zoom = zoom_level / fit_zoom_level
     
     scale_ratio = zoom_level / old_zoom
     pan_x = event.x - (event.x - pan_x) * scale_ratio
